@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -56,6 +57,7 @@ data class HomeItem(
     val scale: Float = 1f, val rotation: Float = 0f, val action: String = "none"
 )
 
+@OptIn(ExperimentalFoundationApi::class)
 class MainActivity : ComponentActivity() {
     private val prefs by lazy { getSharedPreferences("launcher", MODE_PRIVATE) }
     private var catalog by mutableStateOf(emptyList<LaunchApp>())
