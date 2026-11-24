@@ -439,7 +439,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 Box(Modifier.fillMaxSize().padding(top=32.dp)) {
                     LiquidPanel(
-                        Modifier.fillMaxSize().padding(horizontal=5.dp,bottom=3.dp),radius=34.dp
+                        Modifier.fillMaxSize().padding(start=5.dp,end=5.dp,bottom=3.dp),radius=34.dp
                     ) {
                         Column(Modifier.fillMaxSize().padding(top=24.dp,start=14.dp,end=14.dp,bottom=22.dp)) {
                             Row(verticalAlignment=Alignment.CenterVertically) {
