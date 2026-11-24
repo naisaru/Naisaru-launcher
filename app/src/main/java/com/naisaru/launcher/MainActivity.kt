@@ -24,13 +24,6 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -45,12 +38,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPressAfterLongPress
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -69,24 +59,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.zIndex
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -253,20 +239,6 @@ class MainActivity : ComponentActivity() {
             val i=orderedKeys.indexOf(it.key); if (i<0) Int.MAX_VALUE else i
         }.thenBy { it.label.lowercase() })
     }
-    private fun moveToGroup(app:InstalledApp, targetGroup:String) {
-        membership=if(targetGroup=="all") membership-app.pkg else membership+(app.pkg to targetGroup)
-        saveSettings()
-    }
-    private fun placeBefore(app:InstalledApp, target:InstalledApp) {
-        if(app.key==target.key) return
-        val keys=(orderedKeys+installed.map { it.key }).distinct().toMutableList()
-        keys.remove(app.key)
-        val index=keys.indexOf(target.key)
-        keys.add(if(index<0) keys.size else index,app.key)
-        orderedKeys=keys
-        saveSettings()
-    }
-
     private fun moveToGroup(app:InstalledApp,target:String) {
         membership=if(target=="all") membership-app.pkg else membership+(app.pkg to target)
         saveSettings()
