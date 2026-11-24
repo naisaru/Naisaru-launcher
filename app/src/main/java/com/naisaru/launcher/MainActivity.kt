@@ -560,35 +560,127 @@ class MainActivity : ComponentActivity() {
             }
             AnimatedVisibility(
                 visible=edit && !drawer && !homeMenu,
-                modifier=Modifier.align(Alignment.BottomCenter).padding(14.dp),
+                modifier=Modifier.align(Alignment.BottomCenter)
+                    .padding(start=12.dp,end=12.dp,bottom=12.dp),
                 enter=slideInVertically(animationSpec=tween(260)){it}+fadeIn(),
                 exit=slideOutVertically(animationSpec=tween(180)){it}+fadeOut()
             ) {
                 LiquidPanel(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,
+                    Column(Modifier.padding(horizontal=12.dp,vertical=10.dp),
+                        verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement=Arrangement.SpaceBetween,
                             verticalAlignment=Alignment.CenterVertically) {
-                            SmallChoice(Icons.Default.AddPhotoAlternate,"Изображение"){imagePicker.launch(arrayOf("image/png","image/webp","image/*"))}
-                            SmallChoice(Icons.Default.Widgets,"Виджет"){chooseWidget()}
-                            SmallChoice(Icons.Default.Apps,"Приложение"){drawer=true}
-                            SmallChoice(Icons.Default.Check,"Готово"){
-                                edit=false;selected=null;saveSettings()
+                            SmallChoice(Icons.Default.AddPhotoAlternate,"Изображение") {
+                                imagePicker.launch(arrayOf("image/png","image/webp","image/*"))
+                            }
+                            SmallChoice(Icons.Default.Widgets,"Виджет") {chooseWidget()}
+                            SmallChoice(Icons.Default.Apps,"Приложение") {drawer=true}
+                            SmallChoice(Icons.Default.CheckCircle,"Готово") {
+                                edit=false
+                                selected=null
+                                rawDragPositions.clear()
+                                saveSettings()
+                            }
+                        }
+                        HorizontalDivider(color=Color(0x55458A59))
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                            Icon(Icons.Default.GridOn,contentDescription=null,tint=GreenAccent,
+                                modifier=Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Привязка к сетке",color=GlassText,
+                                fontSize=13.sp,modifier=Modifier.weight(1f))
+                            Switch(
+                                checked=gridEnabled,
+                                onCheckedChange={ value ->
+                                    gridEnabled=value
+                                    rawDragPositions.clear()
+                                    saveSettings()
+                                },
+                                modifier=Modifier.height(32.dp),
+                                colors=SwitchDefaults.colors(
+                                    checkedThumbColor=Color(0xFF0C2010),
+                                    checkedTrackColor=GreenAccent,
+                                    uncheckedTrackColor=Color(0xFF303D33)
+                                )
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Box {
+                                TextButton(onClick={gridSizesOpen=true}) {
+                                    Text("${gridStepDp} dp",color=GlassText,fontSize=12.sp)
+                                }
+                                DropdownMenu(expanded=gridSizesOpen,onDismissRequest={gridSizesOpen=false}) {
+                                    listOf(16,24,32,48,64).forEach { value ->
+                                        DropdownMenuItem(
+                                            text={Text("${value} dp")},
+                                            onClick={
+                                                gridStepDp=value
+                                                gridSizesOpen=false
+                                                rawDragPositions.clear()
+                                                saveSettings()
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                         if(selectedObject!=null) {
-                            Text(selectedObject.label,color=GlassText,fontSize=13.sp)
-                            Row(verticalAlignment=Alignment.CenterVertically) {
-                                Text("Размер",color=GlassText,fontSize=12.sp)
-                                Slider(value=selectedObject.scale,onValueChange={new ->
-                                    objects=objects.map {if(it.id==selectedObject.id) it.copy(scale=new) else it}
-                                },valueRange=.25f..3.7f,modifier=Modifier.weight(1f))
-                                TextButton(onClick={selectedObject.let(::deleteObject);selected=null}) {
-                                    Icon(Icons.Default.Delete,"Удалить",tint=GlassText)
-                                }
+                            HorizontalDivider(color=Color(0x55458A59))
+                            Row(Modifier.fillMaxWidth(),
+                                verticalAlignment=Alignment.CenterVertically) {
+                                Text(selectedObject.label,
+                                    color=GlassText,fontWeight=FontWeight.SemiBold,
+                                    fontSize=13.sp,modifier=Modifier.weight(1f),
+                                    maxLines=1,overflow=TextOverflow.Ellipsis)
                                 if(selectedObject.kind=="image") {
-                                    IconButton(onClick={stickerAction=true}) {Icon(Icons.Default.TouchApp,"Действие",tint=GlassText)}
+                                    IconButton(onClick={
+                                        actionSearch=""
+                                        actionUrl=if(selectedObject.action.startsWith("url:"))
+                                            selectedObject.action.removePrefix("url:") else ""
+                                        urlInvalid=false
+                                        stickerAction=true
+                                    },modifier=Modifier.size(38.dp)) {
+                                        Icon(Icons.Default.TouchApp,"Действие изображения",
+                                            tint=GreenAccent,modifier=Modifier.size(21.dp))
+                                    }
+                                }
+                                IconButton(onClick={
+                                    val id=selectedObject.id
+                                    objects=objects.map{if(it.id==id)it.copy(rotation=0f) else it}
+                                    saveSettings()
+                                },modifier=Modifier.size(38.dp)) {
+                                    Icon(Icons.Default.RotateLeft,"Сбросить поворот",
+                                        tint=GlassText,modifier=Modifier.size(21.dp))
+                                }
+                                IconButton(onClick={
+                                    val id=selectedObject.id
+                                    deleteObject(selectedObject)
+                                    rawDragPositions.remove(id)
+                                    selected=null
+                                },modifier=Modifier.size(38.dp)) {
+                                    Icon(Icons.Default.DeleteOutline,"Удалить объект",
+                                        tint=Color(0xFFFFB6A8),modifier=Modifier.size(21.dp))
                                 }
                             }
+                            Row(verticalAlignment=Alignment.CenterVertically) {
+                                Text("Размер",color=GlassText,fontSize=12.sp)
+                                Slider(
+                                    value=selectedObject.scale,
+                                    onValueChange={newSize ->
+                                        val id=selectedObject.id
+                                        objects=objects.map{
+                                            if(it.id==id)it.copy(scale=newSize) else it
+                                        }
+                                    },
+                                    valueRange=.25f..3.7f,
+                                    onValueChangeFinished={saveSettings()},
+                                    modifier=Modifier.weight(1f)
+                                )
+                                Text("${(selectedObject.scale*100).roundToInt()}%",
+                                    color=GlassText,fontSize=12.sp)
+                            }
+                            Text("Поворот: ${selectedObject.rotation.roundToInt()}°",
+                                color=GlassText.copy(alpha=.75f),fontSize=12.sp)
                         }
                     }
                 }
