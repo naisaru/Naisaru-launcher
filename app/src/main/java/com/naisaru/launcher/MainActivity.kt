@@ -393,6 +393,27 @@ class MainActivity : ComponentActivity() {
                     onTap={ if(!edit) homeMenu=false }
                 )
             }) {
+            if(edit && gridEnabled && !drawer) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val cell=gridStepDp.dp.toPx()
+                    if(cell>1f) {
+                        val stroke=1.dp.toPx()
+                        val tint=Color(0xFF91D8A0).copy(alpha=.20f)
+                        var horizontal=0f
+                        while(horizontal<size.height) {
+                            drawLine(tint,Offset(0f,horizontal),
+                                Offset(size.width,horizontal),strokeWidth=stroke)
+                            horizontal+=cell
+                        }
+                        var vertical=0f
+                        while(vertical<size.width) {
+                            drawLine(tint,Offset(vertical,0f),
+                                Offset(vertical,size.height),strokeWidth=stroke)
+                            vertical+=cell
+                        }
+                    }
+                }
+            }
             objects.forEach { obj ->
                 key(obj.id) {
                     val isSelected=edit && obj.id==selected
@@ -403,13 +424,22 @@ class MainActivity : ComponentActivity() {
                         .rotate(obj.rotation)
                     if(isSelected) objectModifier=objectModifier.border(1.5.dp,GlassText, RoundedCornerShape(7.dp))
                     if(edit) {
-                        objectModifier=objectModifier.pointerInput(obj.id) {
+                        objectModifier=objectModifier.pointerInput(obj.id,gridEnabled,gridStepDp) {
                             detectTransformGestures { _, pan, zoom, rotation ->
                                 selected=obj.id
+                                val current=objects.firstOrNull {it.id==obj.id}
+                                    ?: return@detectTransformGestures
+                                val raw=rawDragPositions[obj.id]
+                                    ?: Offset(current.x,current.y)
+                                val moved=raw+pan
+                                rawDragPositions[obj.id]=moved
+                                val cell=with(density){gridStepDp.dp.toPx()}
+                                val x=if(gridEnabled) snapCoordinate(moved.x,cell) else moved.x
+                                val y=if(gridEnabled) snapCoordinate(moved.y,cell) else moved.y
                                 objects=objects.map { item ->
                                     if(item.id==obj.id) item.copy(
-                                        x=(item.x+pan.x).coerceIn(-screenWidth*.5f,screenWidth*1.3f),
-                                        y=(item.y+pan.y).coerceAtLeast(-100f),
+                                        x=x.coerceIn(-screenWidth*.5f,screenWidth*1.3f),
+                                        y=y.coerceAtLeast(-100f),
                                         scale=(item.scale*zoom).coerceIn(.25f,3.7f),
                                         rotation=(item.rotation+rotation)%360f
                                     ) else item
