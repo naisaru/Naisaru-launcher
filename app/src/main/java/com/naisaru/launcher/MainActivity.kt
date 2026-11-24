@@ -17,6 +17,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -30,6 +37,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -49,10 +60,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +86,8 @@ import androidx.core.graphics.drawable.toBitmap
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
+import kotlin.math.atan2
+import kotlin.math.PI
 
 private val GlassText = Color(0xFFFAFFF9)
 private val GroupIcons = listOf("apps","phone","chat","people","play","game","tools","photo","star","heart","folder")
@@ -217,6 +240,19 @@ class MainActivity : ComponentActivity() {
             val i=orderedKeys.indexOf(it.key); if (i<0) Int.MAX_VALUE else i
         }.thenBy { it.label.lowercase() })
     }
+    private fun moveToGroup(app:InstalledApp,target:String) {
+        membership=if(target=="all") membership-app.pkg else membership+(app.pkg to target)
+        saveSettings()
+    }
+    private fun placeBefore(app:InstalledApp,target:InstalledApp) {
+        if(app.key==target.key) return
+        val keys=(orderedKeys+installed.map {it.key}).distinct().toMutableList()
+        keys.remove(app.key)
+        val i=keys.indexOf(target.key)
+        keys.add(if(i<0) keys.size else i,app.key)
+        orderedKeys=keys
+        saveSettings()
+    }
     private fun deleteObject(obj:HomeObject) {
         if(obj.kind=="widget" && obj.widgetId>=0) try { widgets.deleteAppWidgetId(obj.widgetId) } catch (_:Exception) {}
         objects=objects.filterNot { it.id==obj.id };saveSettings()
@@ -231,15 +267,22 @@ class MainActivity : ComponentActivity() {
         var selected by remember { mutableStateOf<Long?>(null) }
         var groupId by remember { mutableStateOf("all") }
         var search by remember { mutableStateOf("") }
+        var showSearch by remember {mutableStateOf(false)}
+        var draggingApp by remember {mutableStateOf<InstalledApp?>(null)}
+        var dragDelta by remember {mutableStateOf(Offset.Zero)}
+        var dragOrigin by remember {mutableStateOf(Offset.Zero)}
+        val groupRects=remember {mutableStateMapOf<String,Rect>()}
+        val appRects=remember {mutableStateMapOf<String,Rect>()}
         var groupEditor by remember { mutableStateOf(false) }
         var appMenu by remember { mutableStateOf<InstalledApp?>(null) }
         var settings by remember { mutableStateOf(false) }
         var themeMenu by remember { mutableStateOf(false) }
         var stickerAction by remember { mutableStateOf(false) }
         var pendingWidgetId by remember { mutableIntStateOf(-1) }
-        var dragAmount by remember { mutableFloatStateOf(0f) }
+
         val configuration=LocalConfiguration.current
-        val screenWidth=with(LocalDensity.current){configuration.screenWidthDp.dp.toPx()}
+        val density=LocalDensity.current
+        val screenWidth=with(density){configuration.screenWidthDp.dp.toPx()}
         val selectedObject=objects.firstOrNull { it.id==selected }
 
         val imagePicker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri:Uri? ->
@@ -299,23 +342,29 @@ class MainActivity : ComponentActivity() {
         }
 
         Box(Modifier.fillMaxSize().background(Color.Transparent)
-            .pointerInput(drawer,edit) {
-                detectVerticalDragGestures(
-                    onDragStart={dragAmount=0f},
-                    onDragEnd={
-                        if(dragAmount < -75f && !edit) { drawer=true;homeMenu=false }
-                        if(dragAmount > 100f && drawer) drawer=false
-                        dragAmount=0f
-                    },
-                    onVerticalDrag={ change,amount ->
-                        if(!change.isConsumed) dragAmount+=amount
-                    }
-                )
+            .pointerInput(drawer,edit,homeMenu) {
+                if(!edit && !homeMenu) awaitEachGesture {
+                    val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                    var delta=Offset.Zero
+                    var triggered=false
+                    do {
+                        val event=awaitPointerEvent(pass=PointerEventPass.Initial)
+                        val change=event.changes.firstOrNull { it.id==down.id } ?: break
+                        if(!change.pressed) break
+                        delta+=change.positionChange()
+                        val threshold=40.dp.toPx()
+                        if(!triggered && kotlin.math.abs(delta.y)>threshold &&
+                            kotlin.math.abs(delta.y)>kotlin.math.abs(delta.x)*1.3f) {
+                            if(delta.y<0f && !drawer) { drawer=true; triggered=true }
+                            else if(delta.y>0f && drawer) {drawer=false;triggered=true}
+                        }
+                    } while(!triggered)
+                }
             }
             .pointerInput(drawer,edit) {
-                detectTapGestures(
-                    onLongPress={ if(!drawer) {homeMenu=true;selected=null} },
-                    onTap={ if(!drawer && !edit) homeMenu=false }
+                if(!drawer) detectTapGestures(
+                    onLongPress={ if(!edit) {homeMenu=true;selected=null} },
+                    onTap={ if(!edit) homeMenu=false }
                 )
             }) {
             objects.forEach { obj ->
@@ -368,14 +417,62 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         if(isSelected) {
-                            listOf(Alignment.TopStart,Alignment.TopEnd,Alignment.BottomStart,Alignment.BottomEnd).forEach { corner ->
-                                Box(Modifier.align(corner).offset(
-                                    x=if(corner==Alignment.TopStart || corner==Alignment.BottomStart) (-5).dp else 5.dp,
-                                    y=if(corner==Alignment.TopStart || corner==Alignment.TopEnd) (-5).dp else 5.dp
-                                ).size(10.dp).clip(CircleShape).background(GlassText))
+                            listOf(Alignment.TopStart,Alignment.TopEnd,Alignment.BottomStart).forEach { corner ->
+                                Box(Modifier.align(corner).size(11.dp).clip(CircleShape)
+                                    .background(GlassText))
                             }
                         }
                     }
+                }
+            }
+
+            // The dedicated rotation grip is a sibling of the object, so its full
+            // 40 dp touch target stays hittable even outside the object bounds.
+            if(edit && selectedObject!=null && !drawer) {
+                val item=selectedObject
+                val extent=with(density){((if(item.kind=="widget") 144f else 82f)*item.scale).dp.toPx()}
+                val radius=extent/2f
+                val centerX=item.x+radius
+                val centerY=item.y+radius
+                val angle=Math.toRadians(item.rotation.toDouble())
+                val handleX=centerX+(kotlin.math.cos(angle)-kotlin.math.sin(angle)).toFloat()*radius
+                val handleY=centerY+(kotlin.math.sin(angle)+kotlin.math.cos(angle)).toFloat()*radius
+                val handleSize=with(density){40.dp.toPx()}
+                var startAngle by remember(item.id) {mutableFloatStateOf(0f)}
+                var startRotation by remember(item.id) {mutableFloatStateOf(0f)}
+                var totalDrag by remember(item.id) {mutableStateOf(androidx.compose.ui.geometry.Offset.Zero)}
+                Box(
+                    Modifier.offset { IntOffset((handleX-handleSize/2).roundToInt(),
+                        (handleY-handleSize/2).roundToInt()) }
+                        .size(40.dp).zIndex(8f)
+                        .clip(CircleShape)
+                        .background(Color(0xE8F3FFF5))
+                        .border(1.5.dp,Color.White,CircleShape)
+                        .pointerInput(item.id) {
+                            detectDragGestures(
+                                onDragStart={
+                                    totalDrag=androidx.compose.ui.geometry.Offset.Zero
+                                    startRotation=objects.firstOrNull {it.id==item.id}?.rotation ?: 0f
+                                    startAngle=kotlin.math.atan2(handleY-centerY,handleX-centerX)
+                                },
+                                onDragEnd={saveSettings()},
+                                onDragCancel={saveSettings()}
+                            ) { change, amount ->
+                                change.consume()
+                                totalDrag+=amount
+                                val current=kotlin.math.atan2(handleY+totalDrag.y-centerY,
+                                    handleX+totalDrag.x-centerX)
+                                val degrees=(current-startAngle)*180f/kotlin.math.PI.toFloat()
+                                objects=objects.map { obj ->
+                                    if(obj.id==item.id) obj.copy(rotation=(startRotation+degrees)%360f)
+                                    else obj
+                                }
+                            }
+                        },
+                    contentAlignment=Alignment.Center
+                ) {
+                    Icon(Icons.Default.RotateRight,"Вращение",tint=Color(0xFF285142),
+                        modifier=Modifier.size(25.dp))
                 }
             }
 
@@ -434,80 +531,156 @@ class MainActivity : ComponentActivity() {
 
             AnimatedVisibility(
                 visible=drawer,
-                enter=slideInVertically(animationSpec=tween(animMillis.toInt().coerceAtLeast(100))){it}+fadeIn(),
-                exit=slideOutVertically(animationSpec=tween(230)){it}+fadeOut()
+                enter=slideInVertically(animationSpec=tween(animMillis.toInt().coerceIn(150,900))) {it}+fadeIn(tween(220)),
+                exit=slideOutVertically(animationSpec=tween(240)){it}+fadeOut(tween(160))
             ) {
-                Box(Modifier.fillMaxSize().padding(top=32.dp)) {
-                    LiquidPanel(
-                        Modifier.fillMaxSize().padding(start=5.dp,end=5.dp,bottom=3.dp),radius=34.dp
-                    ) {
-                        Column(Modifier.fillMaxSize().padding(top=24.dp,start=14.dp,end=14.dp,bottom=22.dp)) {
-                            Row(verticalAlignment=Alignment.CenterVertically) {
-                                Text("Приложения",color=GlassText,fontSize=29.sp,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
-                                IconButton(onClick={groupEditor=true}) {Icon(Icons.Default.Edit,"Редактировать группы",tint=GlassText)}
+                Box(Modifier.fillMaxSize().padding(top=12.dp)
+                    .background(Brush.verticalGradient(listOf(
+                        Color(0x44000000),Color(0xBB07130C),Color(0xEB122119)
+                    )))) {
+                    Column(Modifier.fillMaxSize().padding(start=18.dp,end=18.dp,top=26.dp,bottom=18.dp)) {
+                        Spacer(Modifier.weight(.58f))
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                            Text(categories.firstOrNull {it.id==groupId}?.name ?: "Все",
+                                color=GlassText,fontSize=29.sp,fontWeight=FontWeight.Bold,
+                                modifier=Modifier.weight(1f))
+                            IconButton(onClick={showSearch=!showSearch;if(!showSearch)search=""}) {
+                                Icon(Icons.Default.Search,"Поиск",tint=GlassText)
                             }
-                            OutlinedTextField(
-                                value=search,onValueChange={search=it},modifier=Modifier.fillMaxWidth(),
-                                singleLine=true,
-                                leadingIcon={Icon(Icons.Default.Search,"Поиск",tint=GlassText)},
-                                placeholder={Text("Поиск приложений",color=GlassText.copy(alpha=.7f))},
-                                colors=OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor=GlassText,unfocusedTextColor=GlassText,
-                                    focusedBorderColor=GlassText.copy(alpha=.7f),
-                                    unfocusedBorderColor=GlassText.copy(alpha=.45f),
-                                    cursorColor=GlassText
-                                ),shape=RoundedCornerShape(22.dp)
-                            )
-                            Spacer(Modifier.height(14.dp))
-                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                                categories.forEach { group ->
-                                    val active=groupId==group.id
-                                    LiquidPanel(
-                                        Modifier.widthIn(min=75.dp).clip(RoundedCornerShape(22.dp))
-                                            .clickable {groupId=group.id},radius=20.dp
-                                    ) {
-                                        Column(
-                                            Modifier.background(if(active) Color.White.copy(alpha=.24f) else Color.Transparent)
-                                                .padding(horizontal=12.dp,vertical=10.dp),
-                                            horizontalAlignment=Alignment.CenterHorizontally
-                                        ) {
-                                            Icon(glyph(group.symbol),contentDescription=null,tint=GlassText,modifier=Modifier.size(23.dp))
-                                            Spacer(Modifier.height(4.dp))
-                                            Text(group.name,color=GlassText,fontSize=11.sp,maxLines=1)
-                                        }
-                                    }
-                                }
-                                IconButton(onClick={groupEditor=true}) {
-                                    Icon(Icons.Default.AddCircleOutline,"Добавить группу",tint=GlassText)
-                                }
+                            IconButton(onClick={groupEditor=true}) {
+                                Icon(Icons.Default.MoreVert,"Редактировать группы",tint=GlassText)
                             }
-                            Spacer(Modifier.height(16.dp))
-                            val list=filteredApps(groupId,search)
+                        }
+                        if(showSearch) OutlinedTextField(search,{search=it},Modifier.fillMaxWidth(),
+                            singleLine=true,
+                            placeholder={Text("Поиск приложений",color=GlassText.copy(alpha=.8f))},
+                            colors=OutlinedTextFieldDefaults.colors(
+                                focusedTextColor=GlassText,unfocusedTextColor=GlassText,
+                                focusedBorderColor=GlassText,unfocusedBorderColor=GlassText.copy(alpha=.5f)
+                            ))
+                        Spacer(Modifier.height(12.dp))
+                        AnimatedContent(targetState=groupId,
+                            transitionSpec={
+                                (slideInHorizontally(animationSpec=spring(
+                                    dampingRatio=Spring.DampingRatioMediumBouncy,
+                                    stiffness=Spring.StiffnessMediumLow
+                                )) { it/5 }+fadeIn(tween(180)))
+                                    .togetherWith(slideOutHorizontally(tween(160)){-it/5}+fadeOut(tween(160)))
+                            },label="spring-group-switch",modifier=Modifier.weight(1.4f)
+                        ) { currentGroup ->
+                            val shown=filteredApps(currentGroup,search)
                             LazyVerticalGrid(
-                                GridCells.Fixed(4),modifier=Modifier.weight(1f),
+                                GridCells.Fixed(4),modifier=Modifier.fillMaxSize(),
                                 verticalArrangement=Arrangement.spacedBy(19.dp),
                                 horizontalArrangement=Arrangement.spacedBy(5.dp),
-                                contentPadding=PaddingValues(bottom=16.dp)
+                                contentPadding=PaddingValues(top=6.dp,bottom=14.dp)
                             ) {
-                                items(list,key={it.key}) { app ->
+                                items(shown,key={it.key}) { app ->
+                                    val dragging=draggingApp?.key==app.key
                                     Column(
-                                        Modifier.fillMaxWidth().combinedClickable(
-                                            onClick={openApp(app)},
-                                            onLongClick={appMenu=app}
-                                        ),
+                                        Modifier.fillMaxWidth()
+                                            .alpha(if(dragging) .25f else 1f)
+                                            .onGloballyPositioned {
+                                                if(!dragging) appRects[app.key]=it.boundsInRoot()
+                                            }
+                                            .pointerInput(app.key,currentGroup) {
+                                                detectDragGesturesAfterLongPress(
+                                                    onDragStart={
+                                                        draggingApp=app
+                                                        dragDelta=Offset.Zero
+                                                        dragOrigin=appRects[app.key]?.center ?: Offset.Zero
+                                                    },
+                                                    onDragEnd={
+                                                        val moving=draggingApp
+                                                        val drop=dragOrigin+dragDelta
+                                                        if(moving!=null && dragOrigin!=Offset.Zero) {
+                                                            val group=groupRects.entries.firstOrNull {
+                                                                it.value.contains(drop)
+                                                            }?.key
+                                                            if(group!=null) {
+                                                                moveToGroup(moving,group)
+                                                                groupId=group
+                                                            } else {
+                                                                val otherKey=appRects.entries.firstOrNull {
+                                                                    it.key!=moving.key && it.value.contains(drop)
+                                                                }?.key
+                                                                if(otherKey!=null) installed.firstOrNull{it.key==otherKey}
+                                                                    ?.let {placeBefore(moving,it)}
+                                                            }
+                                                        }
+                                                        draggingApp=null
+                                                        dragDelta=Offset.Zero
+                                                    },
+                                                    onDragCancel={draggingApp=null;dragDelta=Offset.Zero}
+                                                ) { change,amount ->
+                                                    change.consume()
+                                                    dragDelta+=amount
+                                                }
+                                            }
+                                            .clickable { if(draggingApp==null)openApp(app) },
                                         horizontalAlignment=Alignment.CenterHorizontally
                                     ) {
                                         AppIcon(app.pkg,Modifier.size(58.dp))
-                                        Spacer(Modifier.height(5.dp))
-                                        Text(app.label,color=GlassText,fontSize=11.sp,
-                                            maxLines=2,overflow=TextOverflow.Ellipsis,
-                                            lineHeight=12.sp)
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(app.label,color=GlassText,fontSize=11.sp,maxLines=2,
+                                            overflow=TextOverflow.Ellipsis,lineHeight=13.sp,
+                                            textAlign=androidx.compose.ui.text.style.TextAlign.Center)
                                     }
                                 }
                             }
                         }
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(25.dp))
+                            .background(Color(0x552B4D3B))
+                            .border(1.dp,GlassText.copy(alpha=.3f),RoundedCornerShape(25.dp))
+                            .horizontalScroll(rememberScrollState())
+                            .padding(vertical=6.dp,horizontal=3.dp),
+                            verticalAlignment=Alignment.CenterVertically) {
+                            categories.forEach { g ->
+                                val active=groupId==g.id
+                                val springScale by animateFloatAsState(
+                                    targetValue=if(active)1.13f else 1f,
+                                    animationSpec=spring(
+                                        dampingRatio=Spring.DampingRatioMediumBouncy,
+                                        stiffness=Spring.StiffnessLow
+                                    ),label="spring-category-icon"
+                                )
+                                Column(
+                                    Modifier.width(59.dp).height(65.dp)
+                                        .onGloballyPositioned { groupRects[g.id]=it.boundsInRoot() }
+                                        .clip(RoundedCornerShape(17.dp))
+                                        .background(if(active) Color.White.copy(alpha=.16f) else Color.Transparent)
+                                        .clickable {groupId=g.id},
+                                    horizontalAlignment=Alignment.CenterHorizontally,
+                                    verticalArrangement=Arrangement.Center
+                                ) {
+                                    Icon(glyph(g.symbol),g.name,tint=GlassText,
+                                        modifier=Modifier.size(25.dp).scale(springScale))
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(g.name,color=GlassText,fontSize=10.sp,maxLines=1,
+                                        textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                                    Box(Modifier.width(18.dp).height(3.dp)
+                                        .clip(CircleShape)
+                                        .background(if(active) GlassText else Color.Transparent))
+                                }
+                            }
+                            IconButton(onClick={groupEditor=true}) {
+                                Icon(Icons.Default.AddCircle,"Группы",tint=GlassText)
+                            }
+                            IconButton(onClick={settings=true}) {
+                                Icon(Icons.Default.Settings,"Настройки",tint=GlassText)
+                            }
+                        }
                     }
+                }
+            }
+            if(drawer && draggingApp!=null && dragOrigin!=Offset.Zero) {
+                Box(Modifier.offset {
+                    IntOffset((dragOrigin.x+dragDelta.x-29.dp.toPx()).roundToInt(),
+                        (dragOrigin.y+dragDelta.y-29.dp.toPx()).roundToInt())
+                }.zIndex(12f).size(58.dp),
+                    contentAlignment=Alignment.Center) {
+                    AppIcon(draggingApp!!.pkg,Modifier.fillMaxSize())
                 }
             }
         }
@@ -652,7 +825,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(name,{name=it},label={Text("Название")},singleLine=true,enabled=selectedId!="all")
+                    OutlinedTextField(name,onValueChange={ value ->
+                        name=value
+                        if(value.isNotBlank()) {
+                            categories=categories.map { g -> if(g.id==selectedId) g.copy(name=value) else g }
+                            saveSettings()
+                        }
+                    },label={Text("Название")},singleLine=true)
                     Spacer(Modifier.height(12.dp))
                     Text("Значок")
                     Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
@@ -667,7 +846,7 @@ class MainActivity : ComponentActivity() {
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick={
                             val clean=name.trim()
-                            if(selectedId!="all" && clean.isNotEmpty()) {
+                            if(clean.isNotEmpty()) {
                                 categories=categories.map{
                                     if(it.id==selectedId) it.copy(name=clean,symbol=symbol) else it
                                 }
