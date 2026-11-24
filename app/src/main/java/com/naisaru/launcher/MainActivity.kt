@@ -42,6 +42,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -60,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.zIndex
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -273,7 +275,8 @@ class MainActivity : ComponentActivity() {
         var pendingWidgetId by remember { mutableIntStateOf(-1) }
 
         val configuration=LocalConfiguration.current
-        val screenWidth=with(LocalDensity.current){configuration.screenWidthDp.dp.toPx()}
+        val density=LocalDensity.current
+        val screenWidth=with(density){configuration.screenWidthDp.dp.toPx()}
         val selectedObject=objects.firstOrNull { it.id==selected }
 
         val imagePicker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri:Uri? ->
@@ -414,6 +417,56 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
+            }
+
+            // The dedicated rotation grip is a sibling of the object, so its full
+            // 40 dp touch target stays hittable even outside the object bounds.
+            if(edit && selectedObject!=null && !drawer) {
+                val item=selectedObject
+                val extent=with(density){((if(item.kind=="widget") 144f else 82f)*item.scale).dp.toPx()}
+                val radius=extent/2f
+                val centerX=item.x+radius
+                val centerY=item.y+radius
+                val angle=Math.toRadians(item.rotation.toDouble())
+                val handleX=centerX+(kotlin.math.cos(angle)-kotlin.math.sin(angle)).toFloat()*radius
+                val handleY=centerY+(kotlin.math.sin(angle)+kotlin.math.cos(angle)).toFloat()*radius
+                val handleSize=with(density){40.dp.toPx()}
+                var startAngle by remember(item.id) {mutableFloatStateOf(0f)}
+                var startRotation by remember(item.id) {mutableFloatStateOf(0f)}
+                var totalDrag by remember(item.id) {mutableStateOf(androidx.compose.ui.geometry.Offset.Zero)}
+                Box(
+                    Modifier.offset { IntOffset((handleX-handleSize/2).roundToInt(),
+                        (handleY-handleSize/2).roundToInt()) }
+                        .size(40.dp).zIndex(8f)
+                        .clip(CircleShape)
+                        .background(Color(0xE8F3FFF5))
+                        .border(1.5.dp,Color.White,CircleShape)
+                        .pointerInput(item.id) {
+                            detectDragGestures(
+                                onDragStart={
+                                    totalDrag=androidx.compose.ui.geometry.Offset.Zero
+                                    startRotation=objects.firstOrNull {it.id==item.id}?.rotation ?: 0f
+                                    startAngle=kotlin.math.atan2(handleY-centerY,handleX-centerX)
+                                },
+                                onDragEnd={saveSettings()},
+                                onDragCancel={saveSettings()}
+                            ) { change, amount ->
+                                change.consume()
+                                totalDrag+=amount
+                                val current=kotlin.math.atan2(handleY+totalDrag.y-centerY,
+                                    handleX+totalDrag.x-centerX)
+                                val degrees=(current-startAngle)*180f/kotlin.math.PI.toFloat()
+                                objects=objects.map { obj ->
+                                    if(obj.id==item.id) obj.copy(rotation=(startRotation+degrees)%360f)
+                                    else obj
+                                }
+                            }
+                        },
+                    contentAlignment=Alignment.Center
+                ) {
+                    Icon(Icons.Default.RotateRight,"Вращение",tint=Color(0xFF285142),
+                        modifier=Modifier.size(25.dp))
                 }
             }
 
