@@ -314,7 +314,10 @@ class MainActivity : ComponentActivity() {
         val imagePicker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri:Uri? ->
             if(uri!=null) {
                 try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_:Exception) {}
-                objects=objects+HomeObject(System.currentTimeMillis(),"image","Изображение",uri=uri.toString(),x=screenWidth*.23f,y=190f)
+                val id=System.currentTimeMillis()
+                objects=objects+HomeObject(id,"image","Изображение",uri=uri.toString(),x=screenWidth*.23f,y=190f)
+                selected=id
+                rawDragPositions.remove(id)
                 edit=true;homeMenu=false;saveSettings()
             }
         }
@@ -328,7 +331,9 @@ class MainActivity : ComponentActivity() {
             val allocated=pendingWidgetId
             val id=result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,allocated) ?: allocated
             if(result.resultCode==RESULT_OK && id>=0 && widgetManager.getAppWidgetInfo(id)!=null) {
-                objects=objects+HomeObject(System.currentTimeMillis(),"widget","Виджет",x=screenWidth*.16f,y=180f,scale=1.8f,widgetId=id)
+                val objectId=System.currentTimeMillis()
+                objects=objects+HomeObject(objectId,"widget","Виджет",x=screenWidth*.16f,y=180f,scale=1.8f,widgetId=id)
+                selected=objectId
                 edit=true;homeMenu=false;saveSettings()
             } else if(allocated>=0) try { widgets.deleteAppWidgetId(allocated) } catch (_:Exception) {}
             pendingWidgetId=-1
