@@ -915,21 +915,79 @@ class MainActivity : ComponentActivity() {
             )
         }
         if(stickerAction && selectedObject!=null) {
+            val targetId=selectedObject.id
             AlertDialog(
                 onDismissRequest={stickerAction=false},
                 title={Text("Действие изображения")},
                 text={
-                    Column(Modifier.heightIn(max=400.dp).verticalScroll(rememberScrollState())) {
+                    Column(Modifier.heightIn(max=430.dp)
+                        .verticalScroll(rememberScrollState())) {
                         TextButton(onClick={
-                            objects=objects.map{if(it.id==selectedObject.id) it.copy(action="none") else it}
-                            saveSettings();stickerAction=false
-                        }){Text("Без действия (касания проходят сквозь изображение)")}
-                        installed.forEach { app ->
-                            TextButton(onClick={
-                                objects=objects.map{if(it.id==selectedObject.id) it.copy(action=app.pkg) else it}
-                                saveSettings();stickerAction=false
-                            }){Text(app.label)}
+                            objects=objects.map{
+                                if(it.id==targetId) it.copy(action="none") else it
+                            }
+                            saveSettings()
+                            stickerAction=false
+                        }) {
+                            Icon(Icons.Default.TouchApp,null,modifier=Modifier.size(20.dp))
+                            Spacer(Modifier.width(9.dp))
+                            Text("Без действия")
                         }
+                        Text("Открыть ссылку",fontWeight=FontWeight.SemiBold)
+                        OutlinedTextField(
+                            value=actionUrl,
+                            onValueChange={actionUrl=it;urlInvalid=false},
+                            label={Text("Адрес сайта")},
+                            placeholder={Text("https://example.com")},
+                            singleLine=true,
+                            isError=urlInvalid,
+                            modifier=Modifier.fillMaxWidth()
+                        )
+                        if(urlInvalid) Text("Введите корректную ссылку",
+                            color=MaterialTheme.colorScheme.error,fontSize=12.sp)
+                        TextButton(onClick={
+                            val input=actionUrl.trim()
+                            val address=if(input.startsWith("http://",true) ||
+                                input.startsWith("https://",true)) input else "https://"+input
+                            val parsed=Uri.parse(address)
+                            if(parsed.host.isNullOrBlank() || !parsed.host!!.contains(".")) {
+                                urlInvalid=true
+                            } else {
+                                objects=objects.map{
+                                    if(it.id==targetId) it.copy(action="url:"+address) else it
+                                }
+                                saveSettings()
+                                stickerAction=false
+                            }
+                        }) {
+                            Icon(Icons.Default.Link,null,modifier=Modifier.size(19.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Сохранить ссылку")
+                        }
+                        HorizontalDivider()
+                        Text("Запускать приложение",fontWeight=FontWeight.SemiBold)
+                        OutlinedTextField(
+                            value=actionSearch,
+                            onValueChange={actionSearch=it},
+                            label={Text("Поиск приложения")},
+                            leadingIcon={Icon(Icons.Default.Search,null)},
+                            singleLine=true,modifier=Modifier.fillMaxWidth()
+                        )
+                        installed.filter {it.label.contains(actionSearch,true)}
+                            .take(50).forEach { app ->
+                                TextButton(onClick={
+                                    objects=objects.map{
+                                        if(it.id==targetId) it.copy(action="app:"+app.key)
+                                        else it
+                                    }
+                                    saveSettings()
+                                    stickerAction=false
+                                },modifier=Modifier.fillMaxWidth()) {
+                                    AppIcon(app.pkg,Modifier.size(24.dp))
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(app.label,modifier=Modifier.weight(1f))
+                                }
+                            }
                     }
                 },
                 confirmButton={TextButton(onClick={stickerAction=false}){Text("Закрыть")}}
