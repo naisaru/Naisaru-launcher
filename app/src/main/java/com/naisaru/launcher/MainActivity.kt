@@ -86,6 +86,8 @@ import androidx.core.graphics.drawable.toBitmap
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.atan2
 import kotlin.math.PI
 
@@ -118,6 +120,8 @@ class MainActivity : ComponentActivity() {
     private var animPreset by mutableStateOf("Liquid")
     private var animMillis by mutableFloatStateOf(360f)
     private var springAmount by mutableFloatStateOf(.45f)
+    private var gridEnabled by mutableStateOf(false)
+    private var gridStepDp by mutableIntStateOf(32)
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,7 +131,7 @@ class MainActivity : ComponentActivity() {
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         readSettings()
         refreshApps()
-        setContent { MaterialTheme { LauncherScreen() } }
+        setContent { MaterialTheme(colorScheme = NaisaruColors) { LauncherScreen() } }
     }
     override fun onStart() { super.onStart(); try { widgets.startListening() } catch (_:Exception) {} }
     override fun onStop() { try { widgets.stopListening() } catch (_:Exception) {}; super.onStop() }
@@ -159,8 +163,19 @@ class MainActivity : ComponentActivity() {
     }
     private fun openObject(obj:HomeObject) {
         if(obj.kind=="app") openApp(InstalledApp(obj.label,obj.pkg,obj.activity))
-        if(obj.kind=="image" && obj.action!="none")
-            installed.firstOrNull { it.pkg==obj.action }?.let(::openApp)
+        if(obj.kind!="image") return
+        when {
+            obj.action.startsWith("url:") -> {
+                val uri=Uri.parse(obj.action.removePrefix("url:"))
+                if(uri.scheme.equals("http",true) || uri.scheme.equals("https",true)) {
+                    try { startActivity(Intent(Intent.ACTION_VIEW,uri)) } catch (_:Exception) { }
+                }
+            }
+            obj.action.startsWith("app:") -> installed.firstOrNull {
+                it.key==obj.action.removePrefix("app:")
+            }?.let(::openApp)
+            obj.action!="none" -> installed.firstOrNull {it.pkg==obj.action}?.let(::openApp)
+        }
     }
     private fun addApp(app:InstalledApp) {
         objects=objects+HomeObject(System.currentTimeMillis(),"app",app.label,app.pkg,app.activity)
@@ -194,6 +209,8 @@ class MainActivity : ComponentActivity() {
             animPreset=prefs.getString("animation","Liquid") ?: "Liquid"
             animMillis=prefs.getFloat("duration",360f)
             springAmount=prefs.getFloat("spring",.45f)
+            gridEnabled=prefs.getBoolean("grid_enabled",false)
+            gridStepDp=prefs.getInt("grid_spacing",32).coerceIn(16,64)
         } catch (_:Exception) { objects=emptyList();categories=defaultGroups() }
     }
     private fun saveSettings() {
@@ -217,7 +234,8 @@ class MainActivity : ComponentActivity() {
             .putString("order",JSONArray(orderedKeys).toString())
             .putFloat("blur",drawerBlur).putFloat("opacity",glassOpacity)
             .putString("animation",animPreset).putFloat("duration",animMillis)
-            .putFloat("spring",springAmount).apply()
+            .putFloat("spring",springAmount)
+            .putBoolean("grid_enabled",gridEnabled).putInt("grid_spacing",gridStepDp).apply()
     }
     private fun reorder(app:InstalledApp, delta:Int, currentGroup:String, query:String) {
         val list=filteredApps(currentGroup,query)
@@ -253,6 +271,9 @@ class MainActivity : ComponentActivity() {
         orderedKeys=keys
         saveSettings()
     }
+    private fun snapCoordinate(value:Float,cellPx:Float):Float =
+        if(cellPx>0f) (value/cellPx).roundToInt()*cellPx else value
+
     private fun deleteObject(obj:HomeObject) {
         if(obj.kind=="widget" && obj.widgetId>=0) try { widgets.deleteAppWidgetId(obj.widgetId) } catch (_:Exception) {}
         objects=objects.filterNot { it.id==obj.id };saveSettings()
@@ -278,6 +299,11 @@ class MainActivity : ComponentActivity() {
         var settings by remember { mutableStateOf(false) }
         var themeMenu by remember { mutableStateOf(false) }
         var stickerAction by remember { mutableStateOf(false) }
+        var actionSearch by remember {mutableStateOf("")}
+        var actionUrl by remember {mutableStateOf("")}
+        var urlInvalid by remember {mutableStateOf(false)}
+        var gridSizesOpen by remember {mutableStateOf(false)}
+        val rawDragPositions=remember { mutableStateMapOf<Long,Offset>() }
         var pendingWidgetId by remember { mutableIntStateOf(-1) }
 
         val configuration=LocalConfiguration.current
