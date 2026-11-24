@@ -39,6 +39,7 @@ internal val NaisaruColors = darkColorScheme(
 internal fun LiquidPanel(
     modifier: Modifier = Modifier,
     radius: Dp = 24.dp,
+    opacity: Float = .93f,
     content: @Composable BoxScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(radius)
@@ -46,7 +47,7 @@ internal fun LiquidPanel(
         modifier
             .shadow(10.dp, shape, ambientColor = Color.Black.copy(alpha = .42f))
             .clip(shape)
-            .background(Color(0xEF151C17))
+            .background(Color(0xFF151C17).copy(alpha=opacity.coerceIn(.15f,1f)))
             .border(1.dp, Color(0xC3659B71), shape),
         content = content
     )
