@@ -21,6 +21,13 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
@@ -37,7 +44,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPressAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -62,10 +70,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.zIndex
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
@@ -253,6 +266,19 @@ class MainActivity : ComponentActivity() {
         saveSettings()
     }
 
+    private fun moveToGroup(app:InstalledApp,target:String) {
+        membership=if(target=="all") membership-app.pkg else membership+(app.pkg to target)
+        saveSettings()
+    }
+    private fun placeBefore(app:InstalledApp,target:InstalledApp) {
+        if(app.key==target.key) return
+        val keys=(orderedKeys+installed.map {it.key}).distinct().toMutableList()
+        keys.remove(app.key)
+        val i=keys.indexOf(target.key)
+        keys.add(if(i<0) keys.size else i,app.key)
+        orderedKeys=keys
+        saveSettings()
+    }
     private fun deleteObject(obj:HomeObject) {
         if(obj.kind=="widget" && obj.widgetId>=0) try { widgets.deleteAppWidgetId(obj.widgetId) } catch (_:Exception) {}
         objects=objects.filterNot { it.id==obj.id };saveSettings()
@@ -267,6 +293,12 @@ class MainActivity : ComponentActivity() {
         var selected by remember { mutableStateOf<Long?>(null) }
         var groupId by remember { mutableStateOf("all") }
         var search by remember { mutableStateOf("") }
+        var showSearch by remember {mutableStateOf(false)}
+        var draggingApp by remember {mutableStateOf<InstalledApp?>(null)}
+        var dragDelta by remember {mutableStateOf(Offset.Zero)}
+        var dragOrigin by remember {mutableStateOf(Offset.Zero)}
+        val groupRects=remember {mutableStateMapOf<String,Rect>()}
+        val appRects=remember {mutableStateMapOf<String,Rect>()}
         var groupEditor by remember { mutableStateOf(false) }
         var appMenu by remember { mutableStateOf<InstalledApp?>(null) }
         var settings by remember { mutableStateOf(false) }
@@ -743,7 +775,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(name,{name=it},label={Text("Название")},singleLine=true,enabled=selectedId!="all")
+                    OutlinedTextField(name,onValueChange={ value ->
+                        name=value
+                        if(value.isNotBlank()) {
+                            categories=categories.map { g -> if(g.id==selectedId) g.copy(name=value) else g }
+                            saveSettings()
+                        }
+                    },label={Text("Название")},singleLine=true)
                     Spacer(Modifier.height(12.dp))
                     Text("Значок")
                     Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
@@ -758,7 +796,7 @@ class MainActivity : ComponentActivity() {
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick={
                             val clean=name.trim()
-                            if(selectedId!="all" && clean.isNotEmpty()) {
+                            if(clean.isNotEmpty()) {
                                 categories=categories.map{
                                     if(it.id==selectedId) it.copy(name=clean,symbol=symbol) else it
                                 }
