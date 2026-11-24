@@ -482,53 +482,62 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // The dedicated rotation grip is a sibling of the object, so its full
-            // 40 dp touch target stays hittable even outside the object bounds.
+            // Separate 40 dp rotation grip with global pointer coordinates.
+            // Using positionInRoot keeps the angle correct as the grip itself moves.
             if(edit && selectedObject!=null && !drawer) {
                 val item=selectedObject
-                val extent=with(density){((if(item.kind=="widget") 144f else 82f)*item.scale).dp.toPx()}
+                val extent=with(density){
+                    ((if(item.kind=="widget") 144f else 82f)*item.scale).dp.toPx()
+                }
                 val radius=extent/2f
                 val centerX=item.x+radius
                 val centerY=item.y+radius
-                val angle=Math.toRadians(item.rotation.toDouble())
-                val handleX=centerX+(kotlin.math.cos(angle)-kotlin.math.sin(angle)).toFloat()*radius
-                val handleY=centerY+(kotlin.math.sin(angle)+kotlin.math.cos(angle)).toFloat()*radius
-                val handleSize=with(density){40.dp.toPx()}
-                var startAngle by remember(item.id) {mutableFloatStateOf(0f)}
-                var startRotation by remember(item.id) {mutableFloatStateOf(0f)}
-                var totalDrag by remember(item.id) {mutableStateOf(androidx.compose.ui.geometry.Offset.Zero)}
+                val radians=Math.toRadians(item.rotation.toDouble())
+                val handleX=centerX+(cos(radians)-sin(radians)).toFloat()*radius
+                val handleY=centerY+(sin(radians)+cos(radians)).toFloat()*radius
+                val handleRadius=with(density){20.dp.toPx()}
+                var gripTopLeft by remember(item.id) {mutableStateOf(Offset.Zero)}
+                var pivot by remember(item.id) {mutableStateOf(Offset.Zero)}
+                var beginningAngle by remember(item.id) {mutableFloatStateOf(0f)}
+                var beginningRotation by remember(item.id) {mutableFloatStateOf(0f)}
                 Box(
-                    Modifier.offset { IntOffset((handleX-handleSize/2).roundToInt(),
-                        (handleY-handleSize/2).roundToInt()) }
+                    Modifier
+                        .offset {IntOffset((handleX-handleRadius).roundToInt(),
+                            (handleY-handleRadius).roundToInt())}
                         .size(40.dp).zIndex(8f)
+                        .onGloballyPositioned {gripTopLeft=it.positionInRoot()}
                         .clip(CircleShape)
-                        .background(Color(0xE8F3FFF5))
-                        .border(1.5.dp,Color.White,CircleShape)
+                        .background(Color(0xFF79CC86))
+                        .border(2.dp,Color.White,CircleShape)
                         .pointerInput(item.id) {
                             detectDragGestures(
-                                onDragStart={
-                                    totalDrag=androidx.compose.ui.geometry.Offset.Zero
-                                    startRotation=objects.firstOrNull {it.id==item.id}?.rotation ?: 0f
-                                    startAngle=kotlin.math.atan2(handleY-centerY,handleX-centerX)
+                                onDragStart={localStart ->
+                                    val current=objects.firstOrNull {it.id==item.id} ?: item
+                                    val r=with(density){
+                                        ((if(current.kind=="widget") 144f else 82f)*current.scale).dp.toPx()/2f
+                                    }
+                                    pivot=Offset(current.x+r,current.y+r)
+                                    beginningRotation=current.rotation
+                                    val rootStart=gripTopLeft+localStart
+                                    beginningAngle=atan2(rootStart.y-pivot.y,rootStart.x-pivot.x)
                                 },
                                 onDragEnd={saveSettings()},
                                 onDragCancel={saveSettings()}
-                            ) { change, amount ->
+                            ) { change,_ ->
                                 change.consume()
-                                totalDrag+=amount
-                                val current=kotlin.math.atan2(handleY+totalDrag.y-centerY,
-                                    handleX+totalDrag.x-centerX)
-                                val degrees=(current-startAngle)*180f/kotlin.math.PI.toFloat()
+                                val rootPoint=gripTopLeft+change.position
+                                val currentAngle=atan2(rootPoint.y-pivot.y,rootPoint.x-pivot.x)
+                                val degrees=(currentAngle-beginningAngle)*180f/PI.toFloat()
+                                val value=((beginningRotation+degrees)%360f+360f)%360f
                                 objects=objects.map { obj ->
-                                    if(obj.id==item.id) obj.copy(rotation=(startRotation+degrees)%360f)
-                                    else obj
+                                    if(obj.id==item.id) obj.copy(rotation=value) else obj
                                 }
                             }
                         },
                     contentAlignment=Alignment.Center
                 ) {
-                    Icon(Icons.Default.RotateRight,"Вращение",tint=Color(0xFF285142),
-                        modifier=Modifier.size(25.dp))
+                    Icon(Icons.Default.RotateRight,"Вращать объект",
+                        tint=Color(0xFF0F2514),modifier=Modifier.size(25.dp))
                 }
             }
 
