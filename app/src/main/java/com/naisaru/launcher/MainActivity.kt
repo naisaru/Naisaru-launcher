@@ -117,7 +117,7 @@ class MainActivity : ComponentActivity() {
     private var orderedKeys by mutableStateOf(emptyList<String>())
     private var drawerBlur by mutableFloatStateOf(22f)
     private var glassOpacity by mutableFloatStateOf(.72f)
-    private var animPreset by mutableStateOf("Liquid")
+    private var animPreset by mutableStateOf("Classic")
     private var animMillis by mutableFloatStateOf(360f)
     private var springAmount by mutableFloatStateOf(.45f)
     private var gridEnabled by mutableStateOf(false)
@@ -206,7 +206,7 @@ class MainActivity : ComponentActivity() {
             orderedKeys=(0 until order.length()).map { order.optString(it) }
             drawerBlur=prefs.getFloat("blur",22f)
             glassOpacity=prefs.getFloat("opacity",.72f)
-            animPreset=prefs.getString("animation","Liquid") ?: "Liquid"
+            animPreset=prefs.getString("animation","Classic")?.let {if(it=="Liquid") "Classic" else it} ?: "Classic"
             animMillis=prefs.getFloat("duration",360f)
             springAmount=prefs.getFloat("spring",.45f)
             gridEnabled=prefs.getBoolean("grid_enabled",false)
@@ -547,7 +547,7 @@ class MainActivity : ComponentActivity() {
                 exit=slideOutVertically(animationSpec=tween(180)){it/2}+fadeOut(),
                 modifier=Modifier.align(Alignment.BottomCenter).padding(start=12.dp,end=12.dp,bottom=30.dp)
             ) {
-                LiquidPanel(Modifier.fillMaxWidth(),radius=28.dp) {
+                LiquidPanel(Modifier.fillMaxWidth(),radius=28.dp,opacity=glassOpacity) {
                     Row(Modifier.fillMaxWidth().padding(vertical=14.dp,horizontal=4.dp),
                         horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) {
                         MenuChoice("widgets","Виджеты",Modifier.weight(1f)){homeMenu=false;chooseWidget()}
@@ -565,7 +565,7 @@ class MainActivity : ComponentActivity() {
                 enter=slideInVertically(animationSpec=tween(260)){it}+fadeIn(),
                 exit=slideOutVertically(animationSpec=tween(180)){it}+fadeOut()
             ) {
-                LiquidPanel(Modifier.fillMaxWidth()) {
+                LiquidPanel(Modifier.fillMaxWidth(),opacity=glassOpacity) {
                     Column(Modifier.padding(horizontal=12.dp,vertical=10.dp),
                         verticalArrangement=Arrangement.spacedBy(7.dp)) {
                         Row(Modifier.fillMaxWidth(),
@@ -885,11 +885,11 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.heightIn(max=470.dp).verticalScroll(rememberScrollState())) {
                         Text("Размытие фона: "+drawerBlur.roundToInt(),fontWeight=FontWeight.Medium)
                         Slider(drawerBlur,{drawerBlur=it;saveSettings()},valueRange=0f..80f)
-                        Text("Прозрачность стекла: "+(glassOpacity*100).roundToInt()+"%")
+                        Text("Непрозрачность панелей: "+(glassOpacity*100).roundToInt()+"%")
                         Slider(glassOpacity,{glassOpacity=it;saveSettings()},valueRange=.25f..1f)
                         Spacer(Modifier.height(8.dp))
                         Text("Набор анимаций",fontWeight=FontWeight.Medium)
-                        listOf("Liquid","Spring","Smooth","Dynamic").forEach { p ->
+                        listOf("Classic","Spring","Smooth","Dynamic").forEach { p ->
                             Row(verticalAlignment=Alignment.CenterVertically) {
                                 RadioButton(selected=animPreset==p,onClick={animPreset=p;saveSettings()})
                                 Text(p,Modifier.clickable{animPreset=p;saveSettings()})
@@ -909,7 +909,7 @@ class MainActivity : ComponentActivity() {
             AlertDialog(
                 onDismissRequest={themeMenu=false},
                 title={Text("Темы")},
-                text={Text("Стеклянные панели используют цвета обоев. Выбери новые обои или настрой прозрачность стекла в параметрах лаунчера.")},
+                text={Text("Оформление Naisaru Launcher: чёрные панели и зелёные акценты. Обои можно сменить отдельно, а непрозрачность панелей изменить в настройках.")},
                 confirmButton={TextButton(onClick={themeMenu=false;settings=true}){Text("Настройки")}},
                 dismissButton={TextButton(onClick={themeMenu=false}){Text("Закрыть")}}
             )
