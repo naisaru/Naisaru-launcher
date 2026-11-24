@@ -17,6 +17,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -30,6 +37,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -53,6 +64,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +83,8 @@ import androidx.core.graphics.drawable.toBitmap
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
+import kotlin.math.atan2
+import kotlin.math.PI
 
 private val GlassText = Color(0xFFFAFFF9)
 private val GroupIcons = listOf("apps","phone","chat","people","play","game","tools","photo","star","heart","folder")
@@ -217,6 +237,20 @@ class MainActivity : ComponentActivity() {
             val i=orderedKeys.indexOf(it.key); if (i<0) Int.MAX_VALUE else i
         }.thenBy { it.label.lowercase() })
     }
+    private fun moveToGroup(app:InstalledApp, targetGroup:String) {
+        membership=if(targetGroup=="all") membership-app.pkg else membership+(app.pkg to targetGroup)
+        saveSettings()
+    }
+    private fun placeBefore(app:InstalledApp, target:InstalledApp) {
+        if(app.key==target.key) return
+        val keys=(orderedKeys+installed.map { it.key }).distinct().toMutableList()
+        keys.remove(app.key)
+        val index=keys.indexOf(target.key)
+        keys.add(if(index<0) keys.size else index,app.key)
+        orderedKeys=keys
+        saveSettings()
+    }
+
     private fun deleteObject(obj:HomeObject) {
         if(obj.kind=="widget" && obj.widgetId>=0) try { widgets.deleteAppWidgetId(obj.widgetId) } catch (_:Exception) {}
         objects=objects.filterNot { it.id==obj.id };saveSettings()
@@ -237,7 +271,7 @@ class MainActivity : ComponentActivity() {
         var themeMenu by remember { mutableStateOf(false) }
         var stickerAction by remember { mutableStateOf(false) }
         var pendingWidgetId by remember { mutableIntStateOf(-1) }
-        var dragAmount by remember { mutableFloatStateOf(0f) }
+
         val configuration=LocalConfiguration.current
         val screenWidth=with(LocalDensity.current){configuration.screenWidthDp.dp.toPx()}
         val selectedObject=objects.firstOrNull { it.id==selected }
@@ -299,23 +333,29 @@ class MainActivity : ComponentActivity() {
         }
 
         Box(Modifier.fillMaxSize().background(Color.Transparent)
-            .pointerInput(drawer,edit) {
-                detectVerticalDragGestures(
-                    onDragStart={dragAmount=0f},
-                    onDragEnd={
-                        if(dragAmount < -75f && !edit) { drawer=true;homeMenu=false }
-                        if(dragAmount > 100f && drawer) drawer=false
-                        dragAmount=0f
-                    },
-                    onVerticalDrag={ change,amount ->
-                        if(!change.isConsumed) dragAmount+=amount
-                    }
-                )
+            .pointerInput(drawer,edit,homeMenu) {
+                if(!edit && !homeMenu) awaitEachGesture {
+                    val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                    var delta=Offset.Zero
+                    var triggered=false
+                    do {
+                        val event=awaitPointerEvent(pass=PointerEventPass.Initial)
+                        val change=event.changes.firstOrNull { it.id==down.id } ?: break
+                        if(!change.pressed) break
+                        delta+=change.positionChange()
+                        val threshold=40.dp.toPx()
+                        if(!triggered && kotlin.math.abs(delta.y)>threshold &&
+                            kotlin.math.abs(delta.y)>kotlin.math.abs(delta.x)*1.3f) {
+                            if(delta.y<0f && !drawer) { drawer=true; triggered=true }
+                            else if(delta.y>0f && drawer) {drawer=false;triggered=true}
+                        }
+                    } while(!triggered)
+                }
             }
             .pointerInput(drawer,edit) {
-                detectTapGestures(
-                    onLongPress={ if(!drawer) {homeMenu=true;selected=null} },
-                    onTap={ if(!drawer && !edit) homeMenu=false }
+                if(!drawer) detectTapGestures(
+                    onLongPress={ if(!edit) {homeMenu=true;selected=null} },
+                    onTap={ if(!edit) homeMenu=false }
                 )
             }) {
             objects.forEach { obj ->
@@ -368,11 +408,9 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         if(isSelected) {
-                            listOf(Alignment.TopStart,Alignment.TopEnd,Alignment.BottomStart,Alignment.BottomEnd).forEach { corner ->
-                                Box(Modifier.align(corner).offset(
-                                    x=if(corner==Alignment.TopStart || corner==Alignment.BottomStart) (-5).dp else 5.dp,
-                                    y=if(corner==Alignment.TopStart || corner==Alignment.TopEnd) (-5).dp else 5.dp
-                                ).size(10.dp).clip(CircleShape).background(GlassText))
+                            listOf(Alignment.TopStart,Alignment.TopEnd,Alignment.BottomStart).forEach { corner ->
+                                Box(Modifier.align(corner).size(11.dp).clip(CircleShape)
+                                    .background(GlassText))
                             }
                         }
                     }
