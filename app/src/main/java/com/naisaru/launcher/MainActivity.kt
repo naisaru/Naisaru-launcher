@@ -71,6 +71,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.zIndex
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -557,80 +558,156 @@ class MainActivity : ComponentActivity() {
 
             AnimatedVisibility(
                 visible=drawer,
-                enter=slideInVertically(animationSpec=tween(animMillis.toInt().coerceAtLeast(100))){it}+fadeIn(),
-                exit=slideOutVertically(animationSpec=tween(230)){it}+fadeOut()
+                enter=slideInVertically(animationSpec=tween(animMillis.toInt().coerceIn(150,900))) {it}+fadeIn(tween(220)),
+                exit=slideOutVertically(animationSpec=tween(240)){it}+fadeOut(tween(160))
             ) {
-                Box(Modifier.fillMaxSize().padding(top=32.dp)) {
-                    LiquidPanel(
-                        Modifier.fillMaxSize().padding(start=5.dp,end=5.dp,bottom=3.dp),radius=34.dp
-                    ) {
-                        Column(Modifier.fillMaxSize().padding(top=24.dp,start=14.dp,end=14.dp,bottom=22.dp)) {
-                            Row(verticalAlignment=Alignment.CenterVertically) {
-                                Text("Приложения",color=GlassText,fontSize=29.sp,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
-                                IconButton(onClick={groupEditor=true}) {Icon(Icons.Default.Edit,"Редактировать группы",tint=GlassText)}
+                Box(Modifier.fillMaxSize().padding(top=12.dp)
+                    .background(Brush.verticalGradient(listOf(
+                        Color(0x44000000),Color(0xBB07130C),Color(0xEB122119)
+                    )))) {
+                    Column(Modifier.fillMaxSize().padding(start=18.dp,end=18.dp,top=26.dp,bottom=18.dp)) {
+                        Spacer(Modifier.weight(.58f))
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                            Text(categories.firstOrNull {it.id==groupId}?.name ?: "Все",
+                                color=GlassText,fontSize=29.sp,fontWeight=FontWeight.Bold,
+                                modifier=Modifier.weight(1f))
+                            IconButton(onClick={showSearch=!showSearch;if(!showSearch)search=""}) {
+                                Icon(Icons.Default.Search,"Поиск",tint=GlassText)
                             }
-                            OutlinedTextField(
-                                value=search,onValueChange={search=it},modifier=Modifier.fillMaxWidth(),
-                                singleLine=true,
-                                leadingIcon={Icon(Icons.Default.Search,"Поиск",tint=GlassText)},
-                                placeholder={Text("Поиск приложений",color=GlassText.copy(alpha=.7f))},
-                                colors=OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor=GlassText,unfocusedTextColor=GlassText,
-                                    focusedBorderColor=GlassText.copy(alpha=.7f),
-                                    unfocusedBorderColor=GlassText.copy(alpha=.45f),
-                                    cursorColor=GlassText
-                                ),shape=RoundedCornerShape(22.dp)
-                            )
-                            Spacer(Modifier.height(14.dp))
-                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                                categories.forEach { group ->
-                                    val active=groupId==group.id
-                                    LiquidPanel(
-                                        Modifier.widthIn(min=75.dp).clip(RoundedCornerShape(22.dp))
-                                            .clickable {groupId=group.id},radius=20.dp
-                                    ) {
-                                        Column(
-                                            Modifier.background(if(active) Color.White.copy(alpha=.24f) else Color.Transparent)
-                                                .padding(horizontal=12.dp,vertical=10.dp),
-                                            horizontalAlignment=Alignment.CenterHorizontally
-                                        ) {
-                                            Icon(glyph(group.symbol),contentDescription=null,tint=GlassText,modifier=Modifier.size(23.dp))
-                                            Spacer(Modifier.height(4.dp))
-                                            Text(group.name,color=GlassText,fontSize=11.sp,maxLines=1)
-                                        }
-                                    }
-                                }
-                                IconButton(onClick={groupEditor=true}) {
-                                    Icon(Icons.Default.AddCircleOutline,"Добавить группу",tint=GlassText)
-                                }
+                            IconButton(onClick={groupEditor=true}) {
+                                Icon(Icons.Default.MoreVert,"Редактировать группы",tint=GlassText)
                             }
-                            Spacer(Modifier.height(16.dp))
-                            val list=filteredApps(groupId,search)
+                        }
+                        if(showSearch) OutlinedTextField(search,{search=it},Modifier.fillMaxWidth(),
+                            singleLine=true,
+                            placeholder={Text("Поиск приложений",color=GlassText.copy(alpha=.8f))},
+                            colors=OutlinedTextFieldDefaults.colors(
+                                focusedTextColor=GlassText,unfocusedTextColor=GlassText,
+                                focusedBorderColor=GlassText,unfocusedBorderColor=GlassText.copy(alpha=.5f)
+                            ))
+                        Spacer(Modifier.height(12.dp))
+                        AnimatedContent(targetState=groupId,
+                            transitionSpec={
+                                (slideInHorizontally(animationSpec=spring(
+                                    dampingRatio=Spring.DampingRatioMediumBouncy,
+                                    stiffness=Spring.StiffnessMediumLow
+                                )) { it/5 }+fadeIn(tween(180)))
+                                    .togetherWith(slideOutHorizontally(tween(160)){-it/5}+fadeOut(tween(160)))
+                            },label="spring-group-switch",modifier=Modifier.weight(1.4f)
+                        ) { currentGroup ->
+                            val shown=filteredApps(currentGroup,search)
                             LazyVerticalGrid(
-                                GridCells.Fixed(4),modifier=Modifier.weight(1f),
+                                GridCells.Fixed(4),modifier=Modifier.fillMaxSize(),
                                 verticalArrangement=Arrangement.spacedBy(19.dp),
                                 horizontalArrangement=Arrangement.spacedBy(5.dp),
-                                contentPadding=PaddingValues(bottom=16.dp)
+                                contentPadding=PaddingValues(top=6.dp,bottom=14.dp)
                             ) {
-                                items(list,key={it.key}) { app ->
+                                items(shown,key={it.key}) { app ->
+                                    val dragging=draggingApp?.key==app.key
                                     Column(
-                                        Modifier.fillMaxWidth().combinedClickable(
-                                            onClick={openApp(app)},
-                                            onLongClick={appMenu=app}
-                                        ),
+                                        Modifier.fillMaxWidth()
+                                            .alpha(if(dragging) .25f else 1f)
+                                            .onGloballyPositioned {
+                                                if(!dragging) appRects[app.key]=it.boundsInRoot()
+                                            }
+                                            .pointerInput(app.key,currentGroup) {
+                                                detectDragGesturesAfterLongPress(
+                                                    onDragStart={
+                                                        draggingApp=app
+                                                        dragDelta=Offset.Zero
+                                                        dragOrigin=appRects[app.key]?.center ?: Offset.Zero
+                                                    },
+                                                    onDragEnd={
+                                                        val moving=draggingApp
+                                                        val drop=dragOrigin+dragDelta
+                                                        if(moving!=null && dragOrigin!=Offset.Zero) {
+                                                            val group=groupRects.entries.firstOrNull {
+                                                                it.value.contains(drop)
+                                                            }?.key
+                                                            if(group!=null) {
+                                                                moveToGroup(moving,group)
+                                                                groupId=group
+                                                            } else {
+                                                                val otherKey=appRects.entries.firstOrNull {
+                                                                    it.key!=moving.key && it.value.contains(drop)
+                                                                }?.key
+                                                                if(otherKey!=null) installed.firstOrNull{it.key==otherKey}
+                                                                    ?.let {placeBefore(moving,it)}
+                                                            }
+                                                        }
+                                                        draggingApp=null
+                                                        dragDelta=Offset.Zero
+                                                    },
+                                                    onDragCancel={draggingApp=null;dragDelta=Offset.Zero}
+                                                ) { change,amount ->
+                                                    change.consume()
+                                                    dragDelta+=amount
+                                                }
+                                            }
+                                            .clickable { if(draggingApp==null)openApp(app) },
                                         horizontalAlignment=Alignment.CenterHorizontally
                                     ) {
                                         AppIcon(app.pkg,Modifier.size(58.dp))
-                                        Spacer(Modifier.height(5.dp))
-                                        Text(app.label,color=GlassText,fontSize=11.sp,
-                                            maxLines=2,overflow=TextOverflow.Ellipsis,
-                                            lineHeight=12.sp)
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(app.label,color=GlassText,fontSize=11.sp,maxLines=2,
+                                            overflow=TextOverflow.Ellipsis,lineHeight=13.sp,
+                                            textAlign=androidx.compose.ui.text.style.TextAlign.Center)
                                     }
                                 }
                             }
                         }
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(25.dp))
+                            .background(Color(0x552B4D3B))
+                            .border(1.dp,GlassText.copy(alpha=.3f),RoundedCornerShape(25.dp))
+                            .horizontalScroll(rememberScrollState())
+                            .padding(vertical=6.dp,horizontal=3.dp),
+                            verticalAlignment=Alignment.CenterVertically) {
+                            categories.forEach { g ->
+                                val active=groupId==g.id
+                                val springScale by animateFloatAsState(
+                                    targetValue=if(active)1.13f else 1f,
+                                    animationSpec=spring(
+                                        dampingRatio=Spring.DampingRatioMediumBouncy,
+                                        stiffness=Spring.StiffnessLow
+                                    ),label="spring-category-icon"
+                                )
+                                Column(
+                                    Modifier.width(59.dp).height(65.dp)
+                                        .onGloballyPositioned { groupRects[g.id]=it.boundsInRoot() }
+                                        .clip(RoundedCornerShape(17.dp))
+                                        .background(if(active) Color.White.copy(alpha=.16f) else Color.Transparent)
+                                        .clickable {groupId=g.id},
+                                    horizontalAlignment=Alignment.CenterHorizontally,
+                                    verticalArrangement=Arrangement.Center
+                                ) {
+                                    Icon(glyph(g.symbol),g.name,tint=GlassText,
+                                        modifier=Modifier.size(25.dp).scale(springScale))
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(g.name,color=GlassText,fontSize=10.sp,maxLines=1,
+                                        textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                                    Box(Modifier.width(18.dp).height(3.dp)
+                                        .clip(CircleShape)
+                                        .background(if(active) GlassText else Color.Transparent))
+                                }
+                            }
+                            IconButton(onClick={groupEditor=true}) {
+                                Icon(Icons.Default.AddCircle,"Группы",tint=GlassText)
+                            }
+                            IconButton(onClick={settings=true}) {
+                                Icon(Icons.Default.Settings,"Настройки",tint=GlassText)
+                            }
+                        }
                     }
+                }
+            }
+            if(drawer && draggingApp!=null && dragOrigin!=Offset.Zero) {
+                Box(Modifier.offset {
+                    IntOffset((dragOrigin.x+dragDelta.x-29.dp.toPx()).roundToInt(),
+                        (dragOrigin.y+dragDelta.y-29.dp.toPx()).roundToInt())
+                }.zIndex(12f).size(58.dp),
+                    contentAlignment=Alignment.Center) {
+                    AppIcon(draggingApp!!.pkg,Modifier.fillMaxSize())
                 }
             }
         }
