@@ -86,6 +86,8 @@ import androidx.core.graphics.drawable.toBitmap
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.atan2
 import kotlin.math.PI
 
@@ -115,9 +117,11 @@ class MainActivity : ComponentActivity() {
     private var orderedKeys by mutableStateOf(emptyList<String>())
     private var drawerBlur by mutableFloatStateOf(22f)
     private var glassOpacity by mutableFloatStateOf(.72f)
-    private var animPreset by mutableStateOf("Liquid")
+    private var animPreset by mutableStateOf("Classic")
     private var animMillis by mutableFloatStateOf(360f)
     private var springAmount by mutableFloatStateOf(.45f)
+    private var gridEnabled by mutableStateOf(false)
+    private var gridStepDp by mutableIntStateOf(32)
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,7 +131,7 @@ class MainActivity : ComponentActivity() {
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         readSettings()
         refreshApps()
-        setContent { MaterialTheme { LauncherScreen() } }
+        setContent { MaterialTheme(colorScheme = NaisaruColors) { LauncherScreen() } }
     }
     override fun onStart() { super.onStart(); try { widgets.startListening() } catch (_:Exception) {} }
     override fun onStop() { try { widgets.stopListening() } catch (_:Exception) {}; super.onStop() }
@@ -159,8 +163,19 @@ class MainActivity : ComponentActivity() {
     }
     private fun openObject(obj:HomeObject) {
         if(obj.kind=="app") openApp(InstalledApp(obj.label,obj.pkg,obj.activity))
-        if(obj.kind=="image" && obj.action!="none")
-            installed.firstOrNull { it.pkg==obj.action }?.let(::openApp)
+        if(obj.kind!="image") return
+        when {
+            obj.action.startsWith("url:") -> {
+                val uri=Uri.parse(obj.action.removePrefix("url:"))
+                if(uri.scheme.equals("http",true) || uri.scheme.equals("https",true)) {
+                    try { startActivity(Intent(Intent.ACTION_VIEW,uri)) } catch (_:Exception) { }
+                }
+            }
+            obj.action.startsWith("app:") -> installed.firstOrNull {
+                it.key==obj.action.removePrefix("app:")
+            }?.let(::openApp)
+            obj.action!="none" -> installed.firstOrNull {it.pkg==obj.action}?.let(::openApp)
+        }
     }
     private fun addApp(app:InstalledApp) {
         objects=objects+HomeObject(System.currentTimeMillis(),"app",app.label,app.pkg,app.activity)
@@ -191,9 +206,11 @@ class MainActivity : ComponentActivity() {
             orderedKeys=(0 until order.length()).map { order.optString(it) }
             drawerBlur=prefs.getFloat("blur",22f)
             glassOpacity=prefs.getFloat("opacity",.72f)
-            animPreset=prefs.getString("animation","Liquid") ?: "Liquid"
+            animPreset=prefs.getString("animation","Classic")?.let {if(it=="Liquid") "Classic" else it} ?: "Classic"
             animMillis=prefs.getFloat("duration",360f)
             springAmount=prefs.getFloat("spring",.45f)
+            gridEnabled=prefs.getBoolean("grid_enabled",false)
+            gridStepDp=prefs.getInt("grid_spacing",32).coerceIn(16,64)
         } catch (_:Exception) { objects=emptyList();categories=defaultGroups() }
     }
     private fun saveSettings() {
@@ -217,7 +234,8 @@ class MainActivity : ComponentActivity() {
             .putString("order",JSONArray(orderedKeys).toString())
             .putFloat("blur",drawerBlur).putFloat("opacity",glassOpacity)
             .putString("animation",animPreset).putFloat("duration",animMillis)
-            .putFloat("spring",springAmount).apply()
+            .putFloat("spring",springAmount)
+            .putBoolean("grid_enabled",gridEnabled).putInt("grid_spacing",gridStepDp).apply()
     }
     private fun reorder(app:InstalledApp, delta:Int, currentGroup:String, query:String) {
         val list=filteredApps(currentGroup,query)
@@ -253,6 +271,9 @@ class MainActivity : ComponentActivity() {
         orderedKeys=keys
         saveSettings()
     }
+    private fun snapCoordinate(value:Float,cellPx:Float):Float =
+        if(cellPx>0f) (value/cellPx).roundToInt()*cellPx else value
+
     private fun deleteObject(obj:HomeObject) {
         if(obj.kind=="widget" && obj.widgetId>=0) try { widgets.deleteAppWidgetId(obj.widgetId) } catch (_:Exception) {}
         objects=objects.filterNot { it.id==obj.id };saveSettings()
@@ -278,6 +299,11 @@ class MainActivity : ComponentActivity() {
         var settings by remember { mutableStateOf(false) }
         var themeMenu by remember { mutableStateOf(false) }
         var stickerAction by remember { mutableStateOf(false) }
+        var actionSearch by remember {mutableStateOf("")}
+        var actionUrl by remember {mutableStateOf("")}
+        var urlInvalid by remember {mutableStateOf(false)}
+        var gridSizesOpen by remember {mutableStateOf(false)}
+        val rawDragPositions=remember { mutableStateMapOf<Long,Offset>() }
         var pendingWidgetId by remember { mutableIntStateOf(-1) }
 
         val configuration=LocalConfiguration.current
@@ -288,7 +314,10 @@ class MainActivity : ComponentActivity() {
         val imagePicker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri:Uri? ->
             if(uri!=null) {
                 try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_:Exception) {}
-                objects=objects+HomeObject(System.currentTimeMillis(),"image","Изображение",uri=uri.toString(),x=screenWidth*.23f,y=190f)
+                val id=System.currentTimeMillis()
+                objects=objects+HomeObject(id,"image","Изображение",uri=uri.toString(),x=screenWidth*.23f,y=190f)
+                selected=id
+                rawDragPositions.remove(id)
                 edit=true;homeMenu=false;saveSettings()
             }
         }
@@ -302,7 +331,9 @@ class MainActivity : ComponentActivity() {
             val allocated=pendingWidgetId
             val id=result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,allocated) ?: allocated
             if(result.resultCode==RESULT_OK && id>=0 && widgetManager.getAppWidgetInfo(id)!=null) {
-                objects=objects+HomeObject(System.currentTimeMillis(),"widget","Виджет",x=screenWidth*.16f,y=180f,scale=1.8f,widgetId=id)
+                val objectId=System.currentTimeMillis()
+                objects=objects+HomeObject(objectId,"widget","Виджет",x=screenWidth*.16f,y=180f,scale=1.8f,widgetId=id)
+                selected=objectId
                 edit=true;homeMenu=false;saveSettings()
             } else if(allocated>=0) try { widgets.deleteAppWidgetId(allocated) } catch (_:Exception) {}
             pendingWidgetId=-1
@@ -367,6 +398,27 @@ class MainActivity : ComponentActivity() {
                     onTap={ if(!edit) homeMenu=false }
                 )
             }) {
+            if(edit && gridEnabled && !drawer) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val cell=gridStepDp.dp.toPx()
+                    if(cell>1f) {
+                        val stroke=1.dp.toPx()
+                        val tint=Color(0xFF91D8A0).copy(alpha=.20f)
+                        var horizontal=0f
+                        while(horizontal<size.height) {
+                            drawLine(tint,Offset(0f,horizontal),
+                                Offset(size.width,horizontal),strokeWidth=stroke)
+                            horizontal+=cell
+                        }
+                        var vertical=0f
+                        while(vertical<size.width) {
+                            drawLine(tint,Offset(vertical,0f),
+                                Offset(vertical,size.height),strokeWidth=stroke)
+                            vertical+=cell
+                        }
+                    }
+                }
+            }
             objects.forEach { obj ->
                 key(obj.id) {
                     val isSelected=edit && obj.id==selected
@@ -377,13 +429,22 @@ class MainActivity : ComponentActivity() {
                         .rotate(obj.rotation)
                     if(isSelected) objectModifier=objectModifier.border(1.5.dp,GlassText, RoundedCornerShape(7.dp))
                     if(edit) {
-                        objectModifier=objectModifier.pointerInput(obj.id) {
+                        objectModifier=objectModifier.pointerInput(obj.id,gridEnabled,gridStepDp) {
                             detectTransformGestures { _, pan, zoom, rotation ->
                                 selected=obj.id
+                                val current=objects.firstOrNull {it.id==obj.id}
+                                    ?: return@detectTransformGestures
+                                val raw=rawDragPositions[obj.id]
+                                    ?: Offset(current.x,current.y)
+                                val moved=raw+pan
+                                rawDragPositions[obj.id]=moved
+                                val cell=with(density){gridStepDp.dp.toPx()}
+                                val x=if(gridEnabled) snapCoordinate(moved.x,cell) else moved.x
+                                val y=if(gridEnabled) snapCoordinate(moved.y,cell) else moved.y
                                 objects=objects.map { item ->
                                     if(item.id==obj.id) item.copy(
-                                        x=(item.x+pan.x).coerceIn(-screenWidth*.5f,screenWidth*1.3f),
-                                        y=(item.y+pan.y).coerceAtLeast(-100f),
+                                        x=x.coerceIn(-screenWidth*.5f,screenWidth*1.3f),
+                                        y=y.coerceAtLeast(-100f),
                                         scale=(item.scale*zoom).coerceIn(.25f,3.7f),
                                         rotation=(item.rotation+rotation)%360f
                                     ) else item
@@ -426,53 +487,62 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // The dedicated rotation grip is a sibling of the object, so its full
-            // 40 dp touch target stays hittable even outside the object bounds.
+            // Separate 40 dp rotation grip with global pointer coordinates.
+            // Using positionInRoot keeps the angle correct as the grip itself moves.
             if(edit && selectedObject!=null && !drawer) {
                 val item=selectedObject
-                val extent=with(density){((if(item.kind=="widget") 144f else 82f)*item.scale).dp.toPx()}
+                val extent=with(density){
+                    ((if(item.kind=="widget") 144f else 82f)*item.scale).dp.toPx()
+                }
                 val radius=extent/2f
                 val centerX=item.x+radius
                 val centerY=item.y+radius
-                val angle=Math.toRadians(item.rotation.toDouble())
-                val handleX=centerX+(kotlin.math.cos(angle)-kotlin.math.sin(angle)).toFloat()*radius
-                val handleY=centerY+(kotlin.math.sin(angle)+kotlin.math.cos(angle)).toFloat()*radius
-                val handleSize=with(density){40.dp.toPx()}
-                var startAngle by remember(item.id) {mutableFloatStateOf(0f)}
-                var startRotation by remember(item.id) {mutableFloatStateOf(0f)}
-                var totalDrag by remember(item.id) {mutableStateOf(androidx.compose.ui.geometry.Offset.Zero)}
+                val radians=Math.toRadians(item.rotation.toDouble())
+                val handleX=centerX+(cos(radians)-sin(radians)).toFloat()*radius
+                val handleY=centerY+(sin(radians)+cos(radians)).toFloat()*radius
+                val handleRadius=with(density){20.dp.toPx()}
+                var gripTopLeft by remember(item.id) {mutableStateOf(Offset.Zero)}
+                var pivot by remember(item.id) {mutableStateOf(Offset.Zero)}
+                var beginningAngle by remember(item.id) {mutableFloatStateOf(0f)}
+                var beginningRotation by remember(item.id) {mutableFloatStateOf(0f)}
                 Box(
-                    Modifier.offset { IntOffset((handleX-handleSize/2).roundToInt(),
-                        (handleY-handleSize/2).roundToInt()) }
+                    Modifier
+                        .offset {IntOffset((handleX-handleRadius).roundToInt(),
+                            (handleY-handleRadius).roundToInt())}
                         .size(40.dp).zIndex(8f)
+                        .onGloballyPositioned {gripTopLeft=it.positionInRoot()}
                         .clip(CircleShape)
-                        .background(Color(0xE8F3FFF5))
-                        .border(1.5.dp,Color.White,CircleShape)
+                        .background(Color(0xFF79CC86))
+                        .border(2.dp,Color.White,CircleShape)
                         .pointerInput(item.id) {
                             detectDragGestures(
-                                onDragStart={
-                                    totalDrag=androidx.compose.ui.geometry.Offset.Zero
-                                    startRotation=objects.firstOrNull {it.id==item.id}?.rotation ?: 0f
-                                    startAngle=kotlin.math.atan2(handleY-centerY,handleX-centerX)
+                                onDragStart={localStart ->
+                                    val current=objects.firstOrNull {it.id==item.id} ?: item
+                                    val r=with(density){
+                                        ((if(current.kind=="widget") 144f else 82f)*current.scale).dp.toPx()/2f
+                                    }
+                                    pivot=Offset(current.x+r,current.y+r)
+                                    beginningRotation=current.rotation
+                                    val rootStart=gripTopLeft+localStart
+                                    beginningAngle=atan2(rootStart.y-pivot.y,rootStart.x-pivot.x)
                                 },
                                 onDragEnd={saveSettings()},
                                 onDragCancel={saveSettings()}
-                            ) { change, amount ->
+                            ) { change,_ ->
                                 change.consume()
-                                totalDrag+=amount
-                                val current=kotlin.math.atan2(handleY+totalDrag.y-centerY,
-                                    handleX+totalDrag.x-centerX)
-                                val degrees=(current-startAngle)*180f/kotlin.math.PI.toFloat()
+                                val rootPoint=gripTopLeft+change.position
+                                val currentAngle=atan2(rootPoint.y-pivot.y,rootPoint.x-pivot.x)
+                                val degrees=(currentAngle-beginningAngle)*180f/PI.toFloat()
+                                val value=((beginningRotation+degrees)%360f+360f)%360f
                                 objects=objects.map { obj ->
-                                    if(obj.id==item.id) obj.copy(rotation=(startRotation+degrees)%360f)
-                                    else obj
+                                    if(obj.id==item.id) obj.copy(rotation=value) else obj
                                 }
                             }
                         },
                     contentAlignment=Alignment.Center
                 ) {
-                    Icon(Icons.Default.RotateRight,"Вращение",tint=Color(0xFF285142),
-                        modifier=Modifier.size(25.dp))
+                    Icon(Icons.Default.RotateRight,"Вращать объект",
+                        tint=Color(0xFF0F2514),modifier=Modifier.size(25.dp))
                 }
             }
 
@@ -482,7 +552,7 @@ class MainActivity : ComponentActivity() {
                 exit=slideOutVertically(animationSpec=tween(180)){it/2}+fadeOut(),
                 modifier=Modifier.align(Alignment.BottomCenter).padding(start=12.dp,end=12.dp,bottom=30.dp)
             ) {
-                LiquidPanel(Modifier.fillMaxWidth(),radius=28.dp) {
+                LiquidPanel(Modifier.fillMaxWidth(),radius=28.dp,opacity=glassOpacity) {
                     Row(Modifier.fillMaxWidth().padding(vertical=14.dp,horizontal=4.dp),
                         horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) {
                         MenuChoice("widgets","Виджеты",Modifier.weight(1f)){homeMenu=false;chooseWidget()}
@@ -495,35 +565,127 @@ class MainActivity : ComponentActivity() {
             }
             AnimatedVisibility(
                 visible=edit && !drawer && !homeMenu,
-                modifier=Modifier.align(Alignment.BottomCenter).padding(14.dp),
+                modifier=Modifier.align(Alignment.BottomCenter)
+                    .padding(start=12.dp,end=12.dp,bottom=12.dp),
                 enter=slideInVertically(animationSpec=tween(260)){it}+fadeIn(),
                 exit=slideOutVertically(animationSpec=tween(180)){it}+fadeOut()
             ) {
-                LiquidPanel(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,
+                LiquidPanel(Modifier.fillMaxWidth(),opacity=glassOpacity) {
+                    Column(Modifier.padding(horizontal=12.dp,vertical=10.dp),
+                        verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement=Arrangement.SpaceBetween,
                             verticalAlignment=Alignment.CenterVertically) {
-                            SmallChoice(Icons.Default.AddPhotoAlternate,"Изображение"){imagePicker.launch(arrayOf("image/png","image/webp","image/*"))}
-                            SmallChoice(Icons.Default.Widgets,"Виджет"){chooseWidget()}
-                            SmallChoice(Icons.Default.Apps,"Приложение"){drawer=true}
-                            SmallChoice(Icons.Default.Check,"Готово"){
-                                edit=false;selected=null;saveSettings()
+                            SmallChoice(Icons.Default.AddPhotoAlternate,"Изображение") {
+                                imagePicker.launch(arrayOf("image/png","image/webp","image/*"))
+                            }
+                            SmallChoice(Icons.Default.Widgets,"Виджет") {chooseWidget()}
+                            SmallChoice(Icons.Default.Apps,"Приложение") {drawer=true}
+                            SmallChoice(Icons.Default.CheckCircle,"Готово") {
+                                edit=false
+                                selected=null
+                                rawDragPositions.clear()
+                                saveSettings()
+                            }
+                        }
+                        HorizontalDivider(color=Color(0x55458A59))
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                            Icon(Icons.Default.GridOn,contentDescription=null,tint=GreenAccent,
+                                modifier=Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Привязка к сетке",color=GlassText,
+                                fontSize=13.sp,modifier=Modifier.weight(1f))
+                            Switch(
+                                checked=gridEnabled,
+                                onCheckedChange={ value ->
+                                    gridEnabled=value
+                                    rawDragPositions.clear()
+                                    saveSettings()
+                                },
+                                modifier=Modifier.height(32.dp),
+                                colors=SwitchDefaults.colors(
+                                    checkedThumbColor=Color(0xFF0C2010),
+                                    checkedTrackColor=GreenAccent,
+                                    uncheckedTrackColor=Color(0xFF303D33)
+                                )
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Box {
+                                TextButton(onClick={gridSizesOpen=true}) {
+                                    Text("${gridStepDp} dp",color=GlassText,fontSize=12.sp)
+                                }
+                                DropdownMenu(expanded=gridSizesOpen,onDismissRequest={gridSizesOpen=false}) {
+                                    listOf(16,24,32,48,64).forEach { value ->
+                                        DropdownMenuItem(
+                                            text={Text("${value} dp")},
+                                            onClick={
+                                                gridStepDp=value
+                                                gridSizesOpen=false
+                                                rawDragPositions.clear()
+                                                saveSettings()
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                         if(selectedObject!=null) {
-                            Text(selectedObject.label,color=GlassText,fontSize=13.sp)
-                            Row(verticalAlignment=Alignment.CenterVertically) {
-                                Text("Размер",color=GlassText,fontSize=12.sp)
-                                Slider(value=selectedObject.scale,onValueChange={new ->
-                                    objects=objects.map {if(it.id==selectedObject.id) it.copy(scale=new) else it}
-                                },valueRange=.25f..3.7f,modifier=Modifier.weight(1f))
-                                TextButton(onClick={selectedObject.let(::deleteObject);selected=null}) {
-                                    Icon(Icons.Default.Delete,"Удалить",tint=GlassText)
-                                }
+                            HorizontalDivider(color=Color(0x55458A59))
+                            Row(Modifier.fillMaxWidth(),
+                                verticalAlignment=Alignment.CenterVertically) {
+                                Text(selectedObject.label,
+                                    color=GlassText,fontWeight=FontWeight.SemiBold,
+                                    fontSize=13.sp,modifier=Modifier.weight(1f),
+                                    maxLines=1,overflow=TextOverflow.Ellipsis)
                                 if(selectedObject.kind=="image") {
-                                    IconButton(onClick={stickerAction=true}) {Icon(Icons.Default.TouchApp,"Действие",tint=GlassText)}
+                                    IconButton(onClick={
+                                        actionSearch=""
+                                        actionUrl=if(selectedObject.action.startsWith("url:"))
+                                            selectedObject.action.removePrefix("url:") else ""
+                                        urlInvalid=false
+                                        stickerAction=true
+                                    },modifier=Modifier.size(38.dp)) {
+                                        Icon(Icons.Default.TouchApp,"Действие изображения",
+                                            tint=GreenAccent,modifier=Modifier.size(21.dp))
+                                    }
+                                }
+                                IconButton(onClick={
+                                    val id=selectedObject.id
+                                    objects=objects.map{if(it.id==id)it.copy(rotation=0f) else it}
+                                    saveSettings()
+                                },modifier=Modifier.size(38.dp)) {
+                                    Icon(Icons.Default.RotateLeft,"Сбросить поворот",
+                                        tint=GlassText,modifier=Modifier.size(21.dp))
+                                }
+                                IconButton(onClick={
+                                    val id=selectedObject.id
+                                    deleteObject(selectedObject)
+                                    rawDragPositions.remove(id)
+                                    selected=null
+                                },modifier=Modifier.size(38.dp)) {
+                                    Icon(Icons.Default.DeleteOutline,"Удалить объект",
+                                        tint=Color(0xFFFFB6A8),modifier=Modifier.size(21.dp))
                                 }
                             }
+                            Row(verticalAlignment=Alignment.CenterVertically) {
+                                Text("Размер",color=GlassText,fontSize=12.sp)
+                                Slider(
+                                    value=selectedObject.scale,
+                                    onValueChange={newSize ->
+                                        val id=selectedObject.id
+                                        objects=objects.map{
+                                            if(it.id==id)it.copy(scale=newSize) else it
+                                        }
+                                    },
+                                    valueRange=.25f..3.7f,
+                                    onValueChangeFinished={saveSettings()},
+                                    modifier=Modifier.weight(1f)
+                                )
+                                Text("${(selectedObject.scale*100).roundToInt()}%",
+                                    color=GlassText,fontSize=12.sp)
+                            }
+                            Text("Поворот: ${selectedObject.rotation.roundToInt()}°",
+                                color=GlassText.copy(alpha=.75f),fontSize=12.sp)
                         }
                     }
                 }
@@ -728,11 +890,11 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.heightIn(max=470.dp).verticalScroll(rememberScrollState())) {
                         Text("Размытие фона: "+drawerBlur.roundToInt(),fontWeight=FontWeight.Medium)
                         Slider(drawerBlur,{drawerBlur=it;saveSettings()},valueRange=0f..80f)
-                        Text("Прозрачность стекла: "+(glassOpacity*100).roundToInt()+"%")
+                        Text("Непрозрачность панелей: "+(glassOpacity*100).roundToInt()+"%")
                         Slider(glassOpacity,{glassOpacity=it;saveSettings()},valueRange=.25f..1f)
                         Spacer(Modifier.height(8.dp))
                         Text("Набор анимаций",fontWeight=FontWeight.Medium)
-                        listOf("Liquid","Spring","Smooth","Dynamic").forEach { p ->
+                        listOf("Classic","Spring","Smooth","Dynamic").forEach { p ->
                             Row(verticalAlignment=Alignment.CenterVertically) {
                                 RadioButton(selected=animPreset==p,onClick={animPreset=p;saveSettings()})
                                 Text(p,Modifier.clickable{animPreset=p;saveSettings()})
@@ -752,27 +914,85 @@ class MainActivity : ComponentActivity() {
             AlertDialog(
                 onDismissRequest={themeMenu=false},
                 title={Text("Темы")},
-                text={Text("Стеклянные панели используют цвета обоев. Выбери новые обои или настрой прозрачность стекла в параметрах лаунчера.")},
+                text={Text("Оформление Naisaru Launcher: чёрные панели и зелёные акценты. Обои можно сменить отдельно, а непрозрачность панелей изменить в настройках.")},
                 confirmButton={TextButton(onClick={themeMenu=false;settings=true}){Text("Настройки")}},
                 dismissButton={TextButton(onClick={themeMenu=false}){Text("Закрыть")}}
             )
         }
         if(stickerAction && selectedObject!=null) {
+            val targetId=selectedObject.id
             AlertDialog(
                 onDismissRequest={stickerAction=false},
                 title={Text("Действие изображения")},
                 text={
-                    Column(Modifier.heightIn(max=400.dp).verticalScroll(rememberScrollState())) {
+                    Column(Modifier.heightIn(max=430.dp)
+                        .verticalScroll(rememberScrollState())) {
                         TextButton(onClick={
-                            objects=objects.map{if(it.id==selectedObject.id) it.copy(action="none") else it}
-                            saveSettings();stickerAction=false
-                        }){Text("Без действия (касания проходят сквозь изображение)")}
-                        installed.forEach { app ->
-                            TextButton(onClick={
-                                objects=objects.map{if(it.id==selectedObject.id) it.copy(action=app.pkg) else it}
-                                saveSettings();stickerAction=false
-                            }){Text(app.label)}
+                            objects=objects.map{
+                                if(it.id==targetId) it.copy(action="none") else it
+                            }
+                            saveSettings()
+                            stickerAction=false
+                        }) {
+                            Icon(Icons.Default.TouchApp,null,modifier=Modifier.size(20.dp))
+                            Spacer(Modifier.width(9.dp))
+                            Text("Без действия")
                         }
+                        Text("Открыть ссылку",fontWeight=FontWeight.SemiBold)
+                        OutlinedTextField(
+                            value=actionUrl,
+                            onValueChange={actionUrl=it;urlInvalid=false},
+                            label={Text("Адрес сайта")},
+                            placeholder={Text("https://example.com")},
+                            singleLine=true,
+                            isError=urlInvalid,
+                            modifier=Modifier.fillMaxWidth()
+                        )
+                        if(urlInvalid) Text("Введите корректную ссылку",
+                            color=MaterialTheme.colorScheme.error,fontSize=12.sp)
+                        TextButton(onClick={
+                            val input=actionUrl.trim()
+                            val address=if(input.startsWith("http://",true) ||
+                                input.startsWith("https://",true)) input else "https://"+input
+                            val parsed=Uri.parse(address)
+                            if(parsed.host.isNullOrBlank() || !parsed.host!!.contains(".")) {
+                                urlInvalid=true
+                            } else {
+                                objects=objects.map{
+                                    if(it.id==targetId) it.copy(action="url:"+address) else it
+                                }
+                                saveSettings()
+                                stickerAction=false
+                            }
+                        }) {
+                            Icon(Icons.Default.Link,null,modifier=Modifier.size(19.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Сохранить ссылку")
+                        }
+                        HorizontalDivider()
+                        Text("Запускать приложение",fontWeight=FontWeight.SemiBold)
+                        OutlinedTextField(
+                            value=actionSearch,
+                            onValueChange={actionSearch=it},
+                            label={Text("Поиск приложения")},
+                            leadingIcon={Icon(Icons.Default.Search,null)},
+                            singleLine=true,modifier=Modifier.fillMaxWidth()
+                        )
+                        installed.filter {it.label.contains(actionSearch,true)}
+                            .take(50).forEach { app ->
+                                TextButton(onClick={
+                                    objects=objects.map{
+                                        if(it.id==targetId) it.copy(action="app:"+app.key)
+                                        else it
+                                    }
+                                    saveSettings()
+                                    stickerAction=false
+                                },modifier=Modifier.fillMaxWidth()) {
+                                    AppIcon(app.pkg,Modifier.size(24.dp))
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(app.label,modifier=Modifier.weight(1f))
+                                }
+                            }
                     }
                 },
                 confirmButton={TextButton(onClick={stickerAction=false}){Text("Закрыть")}}
